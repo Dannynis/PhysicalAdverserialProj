@@ -290,14 +290,35 @@ def optimize_patch():
                 latent_opt.step()
             
             if i % 10 == 0:
-                unsuccessful_patches_idxs = torch.arange(0, sum_tensor.shape[0])[torch.tensor([x in orig_clases for x in resnet_predict_raw(sum_tensor).argmax(1)])]
-                successful_patches_idxs = torch.arange(0, sum_tensor.shape[0])[torch.tensor([x not in orig_clases for x in resnet_predict_raw(sum_tensor).argmax(1)])]
-                for idx in unsuccessful_patches_idxs:
-                    if successful_patches_idxs.shape[0] != 0:
-                        rand_succ_idx = successful_patches_idxs[torch.randint(0, successful_patches_idxs.shape[0], (1,)).item()]
-                        latent.data[idx] = latent.data[rand_succ_idx] + (torch.randn_like(latent.data[rand_succ_idx]) * 0.05)
-                    else:
-                        latent.data[idx] = (torch.rand((4, 4, 4), device=device) - 0.5) * 2
+                # Vectorized, safer rejuvenation: single forward, mask-based selection, no_grad updates
+                with torch.no_grad():
+                    preds = resnet_predict_raw(sum_tensor).argmax(1)
+                    orig = torch.as_tensor(orig_clases, device=preds.device)
+                    is_orig = torch.isin(preds, orig)
+
+                    unsuccess_idx = torch.nonzero(is_orig, as_tuple=False).squeeze(1)
+                    success_idx = torch.nonzero(~is_orig, as_tuple=False).squeeze(1)
+
+                    if unsuccess_idx.numel() > 0:
+                        # Map flattened image indices back to latent indices (handles batch>1 robustly)
+                        num_latents = latent.shape[0]
+                        unsuccess_lat_idx = unsuccess_idx % num_latents
+
+                        if success_idx.numel() > 0:
+                            success_lat_idx = success_idx % num_latents
+                            donor_idx = success_lat_idx[torch.randint(0, success_lat_idx.numel(), (unsuccess_lat_idx.numel(),), device=success_lat_idx.device)]
+                            noise = torch.randn((unsuccess_lat_idx.numel(), *latent.shape[1:]), device=latent.device) * 0.05
+                            latent[unsuccess_lat_idx].copy_(latent[donor_idx] + noise)
+                        else:
+                            # Reinit to match SD VAE latent scaling rather than uniform [-1,1]
+                            reinit = torch.randn((unsuccess_lat_idx.numel(), *latent.shape[1:]), device=latent.device) * 0.18215
+                            latent[unsuccess_lat_idx].copy_(reinit)
+
+                # Recreate optimizer to reset state after latent replacements
+                lr = 0.1
+                if isinstance(latent_opt, torch.optim.Optimizer) and len(latent_opt.param_groups) > 0:
+                    lr = latent_opt.param_groups[0].get('lr', lr)
+                latent_opt = torch.optim.Adam([latent], lr=lr)
 
             if i % 200 == 0:
                 # print(f"Iteration {i}, Loss: {latent_closure_adp().item():.4f}")
