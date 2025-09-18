@@ -151,7 +151,7 @@ def optimize_patch():
     
     os.makedirs('./results', exist_ok=True)
     curr_without_sec = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    curr_without_sec = curr_without_sec.replace(" ", "_")
+    curr_without_sec = curr_without_sec.replace(" ", "_").replace(":", "_")
 
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -161,7 +161,7 @@ def optimize_patch():
 
     vae =  pipe.vae.to(device).eval()
 
-    latent = (torch.rand((8,4, 4, 4), device=device) - 0.5) * 2
+    latent = (torch.rand((30,4, 4, 4), device=device) - 0.5) * 2
 
     # latent = torch.load(r"C:\git\PhysicalAdverserialProj\results\working_latent_multiview_2025-09-15_20").to(device)
     latent = latent.clone().detach()
@@ -246,7 +246,7 @@ def optimize_patch():
     print('starting optimization')
     i = 0 
     # blend_ratio = 1
-    for epoch in range(30):
+    for epoch in range(50):
         for frames, H_t in tqdm.tqdm(train_loader):
 
             i += 1
@@ -321,7 +321,8 @@ def optimize_patch():
 
                         test_pred = resnet_predict(sum_tensor.cuda())
                         if type(test_pred) == list:
-                            print(np.unique(resnet_predict(sum_tensor.cuda()),return_counts=True))
+                            pred = resnet_predict(sum_tensor.cuda())
+                            print(np.unique(pred,return_counts=True))
                         # print(lx)
 
                         out_path =  rf'./results/working_latent_multiview_{curr_without_sec}.pth'
@@ -330,7 +331,9 @@ def optimize_patch():
                         out_path =  rf'./results/working_patch_multiview_{curr_without_sec}.pth'
                         torch.save(adv_patch[argmin// sum_tensor.shape[0]].cpu().detach(), out_path)
                         print('saved patch to', out_path)
-
+                        out_path =  rf'./results/working_patchs_all_multiview_{curr_without_sec}.pth'
+                        torch.save((pred,adv_patch.cpu().detach()), out_path)
+                        print('saved patch to', out_path)
 
 
 

@@ -155,27 +155,31 @@ def draw_rectangle(event, x, y, flags, param):
       done = True
 
 
-def capture_many_frames(num_frames=100):
+def capture_many_frames():
     
     ls = os.listdir('.')
     captures = [f for f in ls if f.startswith('captures_frames_multiview_') ]
     cap_dir = f'captures_frames_multiview_{len(captures)}'
     os.makedirs(cap_dir, exist_ok=True)
 
+    pbar = tqdm.tqdm(total=1000, desc="Capturing frames")
     
-    for _ in tqdm.tqdm(range(num_frames)):
+    while True:
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
         ret, frame = cap.read()
         if frame is None:
             continue
         timestamp = int(time.time() * 1000)
+        cv2.imshow('frame', cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
         cv2.imwrite(os.path.join(cap_dir, f'frame_{timestamp}.png'), frame)
+        pbar.update(1)
+
         
         if not ret:
             break
-        
-    
+
+    pbar.close()
 
 screen_res = 1920*2 , 1080*2
 # screen_res = 640 , 480
@@ -249,7 +253,7 @@ def display_drawer():
     cv2.imshow("Rectangle Window", img)
 
     if wk == 99:
-        capture_many_frames(num_frames=100)
+        capture_many_frames()
     else:
         cv2.waitKey(1)
 
