@@ -47,6 +47,7 @@ height = data['height']
 width = data['width']
 
 resizer = torchvision.transforms.Resize((height, width))
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 # Define parameters for ArUco marker detection
@@ -141,7 +142,6 @@ def warp(decoded_latents,H_t):
 
 
 vae = None
-device = None
 valid_frames = None
 def optimize_patch():
 
@@ -154,7 +154,6 @@ def optimize_patch():
     curr_without_sec = curr_without_sec.replace(" ", "_").replace(":", "_")
 
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4")
@@ -179,7 +178,8 @@ def optimize_patch():
 
     ls = os.listdir('.')
     captures = [f for f in ls if f.startswith('captures_frames_multiview_') ]
-    cap_dir = captures[-1]
+    cap_dir = f'captures_frames_multiview_{len(captures)-1}'
+    print('using capture dir', cap_dir)
 
     valid_frame_paths = glob.glob(f'{cap_dir}/*.png')
 
@@ -221,8 +221,8 @@ def optimize_patch():
 
     print('creating dataloader')
     train,test = torch.utils.data.random_split(ds, [int(len(ds)*0.8), len(ds)-int(len(ds)*0.8)])
-    train_loader = DataLoader(train, batch_size=1, shuffle=True, num_workers=2)
-    test_loader = DataLoader(test, batch_size=10, shuffle=False, num_workers=2)
+    train_loader = DataLoader(train, batch_size=1, shuffle=True, num_workers=2, persistent_workers=True)
+    test_loader = DataLoader(test, batch_size=10, shuffle=False, num_workers=2, persistent_workers=True)
 
     print('dataloader created')
         
@@ -255,7 +255,12 @@ def optimize_patch():
             frames = frames.to('cuda')
 
             blend_ratio = torch.rand(1).cuda() * 0.2 + 0.8
-            if i < 400:
+            stronger_aug_steps_thresh = 400
+            
+            if i == stronger_aug_steps_thresh:
+                print('using stronger augmentations')
+
+            if i < stronger_aug_steps_thresh:
                 mapper = lambda x: jitter(x)
 
             else:
@@ -283,6 +288,16 @@ def optimize_patch():
 
             if i % 1 == 0:
                 latent_opt.step()
+            
+            if i % 10 == 0:
+                unsuccessful_patches_idxs = torch.arange(0, sum_tensor.shape[0])[torch.tensor([x in orig_clases for x in resnet_predict_raw(sum_tensor).argmax(1)])]
+                successful_patches_idxs = torch.arange(0, sum_tensor.shape[0])[torch.tensor([x not in orig_clases for x in resnet_predict_raw(sum_tensor).argmax(1)])]
+                for idx in unsuccessful_patches_idxs:
+                    if successful_patches_idxs.shape[0] != 0:
+                        rand_succ_idx = successful_patches_idxs[torch.randint(0, successful_patches_idxs.shape[0], (1,)).item()]
+                        latent.data[idx] = latent.data[rand_succ_idx] + (torch.randn_like(latent.data[rand_succ_idx]) * 0.05)
+                    else:
+                        latent.data[idx] = (torch.rand((4, 4, 4), device=device) - 0.5) * 2
 
             if i % 200 == 0:
                 # print(f"Iteration {i}, Loss: {latent_closure_adp().item():.4f}")
@@ -325,15 +340,15 @@ def optimize_patch():
                             print(np.unique(pred,return_counts=True))
                         # print(lx)
 
-                        out_path =  rf'./results/working_latent_multiview_{curr_without_sec}.pth'
-                        torch.save(latent.cpu().detach(), out_path)
-                        print('saved latent to', out_path)
-                        out_path =  rf'./results/working_patch_multiview_{curr_without_sec}.pth'
-                        torch.save(adv_patch[argmin// sum_tensor.shape[0]].cpu().detach(), out_path)
-                        print('saved patch to', out_path)
-                        out_path =  rf'./results/working_patchs_all_multiview_{curr_without_sec}.pth'
-                        torch.save((pred,adv_patch.cpu().detach()), out_path)
-                        print('saved patch to', out_path)
+                    out_path =  rf'./results/working_latent_multiview_{curr_without_sec}.pth'
+                    torch.save(latent.cpu().detach(), out_path)
+                    print('saved latent to', out_path)
+                    out_path =  rf'./results/working_patch_multiview_{curr_without_sec}.pth'
+                    # torch.save(adv_patch[argmin// sum_tensor.shape[0]].cpu().detach(), out_path)
+                    # print('saved patch to', out_path)
+                    out_path =  rf'./results/working_patchs_all_multiview_{curr_without_sec}.pth'
+                    torch.save((pred,adv_patch.cpu().detach()), out_path)
+                    print('saved patch to', out_path)
 
 
 

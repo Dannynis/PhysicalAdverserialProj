@@ -17,7 +17,6 @@ import tqdm
 
 ic4.Library.init()
 
-
 def bmp_roundtrip(m):
 
     with tempfile.NamedTemporaryFile(suffix='.bmp', delete=False) as temp_file:
@@ -171,7 +170,7 @@ def capture_many_frames():
         if frame is None:
             continue
         timestamp = int(time.time() * 1000)
-        cv2.imshow('frame', cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+        cv2.imshow('frame', frame)
         cv2.imwrite(os.path.join(cap_dir, f'frame_{timestamp}.png'), frame)
         pbar.update(1)
 
