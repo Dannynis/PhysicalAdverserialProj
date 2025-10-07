@@ -1,50 +1,49 @@
 from IPython.core.display import Image
 from torchvision.io import read_image
-from torchvision.models import resnet50, ResNet50_Weights
+from torchvision.models import efficientnet_b4, EfficientNet_B4_Weights
+# from torchvision.models import regnet_y_32gf, RegNet_Y_32GF_Weights
+# from torchvision.models import vit_l_16, ViT_L_16_Weights
 import torchvision
 import torch
 
-weights = ResNet50_Weights.DEFAULT
-model = resnet50(weights=weights)
+# weights = ViT_L_16_Weights.IMAGENET1K_SWAG_E2E_V1
+# model = vit_l_16(weights=weights)
+weights = EfficientNet_B4_Weights.IMAGENET1K_V1
+model = efficientnet_b4(weights=weights)
 model = model.eval().cuda()
 
 
 preprocess = weights.transforms()
 #input image w x h x c
 
-def resnet_predict(image):
+def vit_predict(image):
     with torch.no_grad():
-      prediction = resnet_predict_raw(image)
-      if prediction.shape[0] == 1:
-        prediction = prediction.squeeze(0).softmax(0)
-        class_id = prediction.argmax().item()
-        score = prediction[class_id].item()
-        category_name = weights.meta["categories"][class_id]
-        # return(f"class id - {class_id} {category_name}: {100 * score:.1f}%")
-        return(f"{category_name}: {100 * score:.3f}%")
-      res_lst = []
-      for p in prediction:
-        p = p.squeeze(0).softmax(0)
-        class_id = p.argmax().item()
-        score = p[class_id].item()
-        category_name = weights.meta["categories"][class_id]
-        res_lst.append(category_name)
-      return res_lst
+        prediction = predict_raw(image)
+        if prediction.shape[0] == 1:
+            prediction = prediction.squeeze(0).softmax(0)
+            class_id = prediction.argmax().item()
+            score = prediction[class_id].item()
+            category_name = weights.meta["categories"][class_id]
+            # return(f"class id - {class_id} {category_name}: {100 * score:.1f}%")
+            return(f"{category_name}: {100 * score:.3f}%")
+        res_lst = []
+        for p in prediction:
+            p = p.squeeze(0).softmax(0)
+            class_id = p.argmax().item()
+            score = p[class_id].item()
+            category_name = weights.meta["categories"][class_id]
+            res_lst.append(category_name)
+        return res_lst
 
 
-def resnet_predict_raw(image):
+def predict_raw(image):
+    # Apply inference preprocessing transforms
+    batch = preprocess(image)
 
-
-  if image.shape != (3, 256, 256):
-    rimage = torchvision.transforms.Resize((256, 256))(image)
-  else:
-    rimage = image
-
-  # Step 3: Apply inference preprocessing transforms
-  batch = preprocess(rimage)
-
-  # Step 4: Use the model and print the predicted category
-  return model(batch).softmax(-1)
+    # ViT returns classification logits directly
+    output = model(batch)
+    
+    return output.softmax(-1)
 
 
 batch_size = 1
@@ -62,18 +61,18 @@ total_clases_without_orig = torch.tensor([x for x in list(range(0, 1000)) if x n
 def adv_loss_calc(image):
     assert len(image.shape) == 4, "Image should be of shape (batch_size, 3, h, w)"
     adv_loss = []
-    pred = resnet_predict_raw(image)
+    pred = predict_raw(image)
     for p in pred:
-      adv_loss.append(p[orig_clases].mean())
+        adv_loss.append(p[orig_clases].mean())
     return torch.stack(adv_loss)
 
 
 
 def adv_loss_calc2(image):
     adv_loss = []
-    pred = resnet_predict_raw(image)
+    pred = predict_raw(image)
     for p in pred:
-      forbiden = p[orig_clases].max()
-      allowed = p[total_clases_without_orig].max()
-      adv_loss.append(forbiden - allowed)
+        forbiden = p[orig_clases].max()
+        allowed = p[total_clases_without_orig].max()
+        adv_loss.append(forbiden - allowed)
     return torch.stack(adv_loss)
