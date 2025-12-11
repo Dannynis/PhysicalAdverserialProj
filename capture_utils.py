@@ -156,21 +156,40 @@ def draw_rectangle(event, x, y, flags, param):
 
 def capture_many_frames():
     
-    ls = os.listdir('.')
+    ls = os.listdir('./captures_frames_multiview')
     captures = [f for f in ls if f.startswith('captures_frames_multiview_') ]
-    cap_dir = f'captures_frames_multiview_{len(captures)}'
+    cap_dir = f'./captures_frames_multiview/captures_frames_multiview_{len(captures)}'
     os.makedirs(cap_dir, exist_ok=True)
 
     pbar = tqdm.tqdm(total=1000, desc="Capturing frames")
-    
+    detectorParams = cv2.aruco.DetectorParameters()
+    detector = aruco.ArucoDetector(aruco_dict, detectorParams)
+
     while True:
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(1) == ord('q'):
             break
         ret, frame = cap.read()
+        frame_copy = frame.copy()
+
         if frame is None:
             continue
         timestamp = int(time.time() * 1000)
-        cv2.imshow('frame', frame)
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        cv2.imshow("Frame", gray)
+        key = cv2.waitKey(1)
+        if key == ord('q'):
+            break
+        corners, ids, _ = detector.detectMarkers(gray)
+        if ids is not None:
+            ids_flat = ids.flatten()
+            for marker_id, corner in zip(ids_flat, corners):
+                pts = corner.reshape((4, 2)).astype(int)
+                color = (0, 255, 255) if int(marker_id) == displayed_aruco_code else (0, 255, 0)
+                # draw the marker contour
+                cv2.polylines(frame_copy, [pts], True, color, 2)
+
+        cv2.imshow('frame', frame_copy)
         cv2.imwrite(os.path.join(cap_dir, f'frame_{timestamp}.png'), frame)
         pbar.update(1)
 
@@ -261,6 +280,9 @@ def display_drawer():
     orig_proj_striped_corners = np.array([[0, 0], [proj_marker_image.shape[1], 0], [proj_marker_image.shape[1], proj_marker_image.shape[0]], [0, proj_marker_image.shape[0]]], dtype=np.float32)
 
 
+def get_orig_img():
+    global orig_img
+    return orig_img
 
     
 
@@ -336,14 +358,24 @@ def cap_and_uwarp():
     return frame_unwarped
 
 
-def plot_on_screen(pimg):
+def plot_on_screen(pimg, back_image = None):
 
     cv2.namedWindow("Rectangle Window", cv2.WND_PROP_FULLSCREEN)
     cv2.setWindowProperty("Rectangle Window", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
+
+    if back_image is not None:
+        color_pattern = back_image.copy()
+
+    else:
+        color_pattern = orig_img.copy()
+
+    non_zero_indices = np.nonzero(color_pattern)
+    a,b,c,d = non_zero_indices[0].min(), non_zero_indices[0].max(), non_zero_indices[1].min(), non_zero_indices[1].max()
+    width = d - c
+    height = b - a
     to_place = cv2.resize(pimg, (width+1, height+1), interpolation=cv2.INTER_AREA)
 
-    color_pattern = orig_img.copy()
 
     color_pattern = np.expand_dims(color_pattern, axis=-1).repeat(3, axis=-1) 
 
@@ -426,6 +458,7 @@ def photometric_calibration():
             frame_unwarped = np.mean(unwarped_frames, axis=0).astype(np.uint8)
             plt.imshow(frame_unwarped)
             plt.show()
+            # time.sleep(1)
             captured[description] = frame_unwarped
             # clear the console
             IPython.display.clear_output(wait=True)
