@@ -1,6 +1,7 @@
 from IPython.core.display import Image
 from torchvision.io import read_image
-from torchvision.models import efficientnet_b4, EfficientNet_B4_Weights
+from torchvision.models import inception_v3, Inception_V3_Weights
+# from torchvision.models import efficientnet_b4, EfficientNet_B4_Weights
 # from torchvision.models import regnet_y_32gf, RegNet_Y_32GF_Weights
 # from torchvision.models import vit_l_16, ViT_L_16_Weights
 import torchvision
@@ -8,8 +9,10 @@ import torch
 
 # weights = ViT_L_16_Weights.IMAGENET1K_SWAG_E2E_V1
 # model = vit_l_16(weights=weights)
-weights = EfficientNet_B4_Weights.IMAGENET1K_V1
-model = efficientnet_b4(weights=weights)
+# weights = EfficientNet_B4_Weights.IMAGENET1K_V1
+# model = efficientnet_b4(weights=weights)
+weights = Inception_V3_Weights.IMAGENET1K_V1
+model = inception_v3(weights=weights)
 model = model.eval().cuda()
 
 
@@ -40,8 +43,12 @@ def predict_raw(image):
     # Apply inference preprocessing transforms
     batch = preprocess(image)
 
-    # ViT returns classification logits directly
+    # Get model output
     output = model(batch)
+    
+    # Handle Inception V3's auxiliary output during training mode
+    if isinstance(output, tuple):
+        output = output[0]
     
     return output.softmax(-1)
 
