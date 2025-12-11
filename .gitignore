@@ -4,3 +4,4 @@ captures_frames_multiview*
 results
 .history/*
 .history
+*.html
