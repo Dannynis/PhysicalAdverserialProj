@@ -1,7 +1,9 @@
+import IPython
 import cv2.aruco as aruco
 import pickle
 import time
 
+import datetime
 import cv2
 import matplotlib.pyplot as plt
 import imagingcontrol4 as ic4
@@ -104,7 +106,7 @@ class CaptureSystem:
         self.img = np.zeros((screen_res[1], screen_res[0], 3), np.uint8)
         
         # ArUco setup
-        self.aruco_dict_type = cv2.aruco.DICT_6X6_250
+        self.aruco_dict_type = cv2.aruco.DICT_4X4_50
         self.marker_length = 0.05
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(self.aruco_dict_type)
         self.proj_marker_image = cv2.aruco.generateImageMarker(
@@ -187,12 +189,20 @@ class CaptureSystem:
         else:
             cv2.waitKey(1)
 
-        self.orig_rect_corners = [
-            (self.rect_corners[0][0], self.rect_corners[0][1]),
-            (self.rect_corners[1][0], self.rect_corners[0][1]),
-            (self.rect_corners[1][0], self.rect_corners[1][1]),
-            (self.rect_corners[0][0], self.rect_corners[1][1])
-        ]
+        # self.orig_rect_corners = [
+        #     (self.rect_corners[0][0], self.rect_corners[0][1]),
+        #     (self.rect_corners[1][0], self.rect_corners[0][1]),
+        #     (self.rect_corners[1][0], self.rect_corners[1][1]),
+        #     (self.rect_corners[0][0], self.rect_corners[1][1])
+        # ]
+        
+        xs = np.array(self.rect_corners)[:,0]
+        ys = np.array(self.rect_corners)[:,1]
+
+        self.orig_rect_corners = [[xs.min(), ys.min()],
+                   [xs.max(), ys.min()],
+                     [xs.max(), ys.max()],
+                        [xs.min(), ys.max()]]
         self.orig_proj_corners = np.array(self.orig_rect_corners)
         self.orig_proj_striped_corners = np.array([
             [0, 0],
@@ -249,17 +259,28 @@ class CaptureSystem:
 
         pbar.close()
 
+    def random_contrast_adjustment(self, image, alpha=None):
+        """Apply random contrast adjustment to the image."""
+        if alpha is None:
+            alpha = np.random.uniform(0.5, 1)  # Contrast control
+
+        adjusted = cv2.convertScaleAbs(image, alpha=alpha, beta=0)
+
+        return adjusted, alpha
     def run_aruco_detector(self):
         """Detect ArUco markers and compute homography."""
         ids = []
+        best_alpha = None
         detectorParams = cv2.aruco.DetectorParameters()
         detector = aruco.ArucoDetector(self.aruco_dict, detectorParams)
         detectorParams.adaptiveThreshConstant = 5
-
-        while ids is None or displayed_aruco_code not in ids:
-            for i in range(10):
+        detected_corners = []
+        marked_frames = 5
+        while ids is None or len(detected_corners) < marked_frames:
+            print(f"{len(detected_corners)}/{marked_frames} marker corners detected.")
+            for i in range(3):
                 ret, frame = self.cap.read()
-                time.sleep(0.1)
+                time.sleep(0.01)
                 if not ret:
                     print("Failed to capture image")
                     self.cap = GenericCapturer(url=self.url)
@@ -267,30 +288,56 @@ class CaptureSystem:
             
             if frame is not None:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+                gray, alpha = self.random_contrast_adjustment(gray, best_alpha)
+                
                 cv2.imshow("Frame", gray)
                 cv2.waitKey(1)
                 corners, ids, _ = detector.detectMarkers(gray)
-                if ids is None:
+                if ids is None or displayed_aruco_code not in ids.flatten():
                     print("No markers detected, retrying...")
                     continue
                 else:
+                    print(ids)
+                    best_alpha = alpha
                     for i, corner in enumerate(corners):
-                        print(ids)
+                        if ids[i] == displayed_aruco_code:
+                            detected_corners.append(corner)
+                
+            IPython.display.clear_output(wait=True)
 
+        dc = np.array(detected_corners)
+        center = np.floor(dc.reshape(-1, 2).mean(axis=0))
+        tl = ((dc - center)**2).sum(axis=-1)[:,0,0].argmin()
+        tr = ((dc - center)**2).sum(axis=-1)[:,0,1].argmin()
+        br = ((dc - center)**2).sum(axis=-1)[:,0,2].argmin()
+        bl = ((dc - center)**2).sum(axis=-1)[:,0,3].argmin()
+        shrinked_corners = [dc[tl][0,0], dc[tr][0,1], dc[br][0,2], dc[bl][0,3]]
+
+        self.detected_corners = detected_corners
+        # avarage_corner_int = np.mean(np.array(detected_corners), axis=0).astype(int)
+        
         cv2.destroyAllWindows()
 
         # add corners to gray
 
-        corners_img_proj = corners[np.where(ids == displayed_aruco_code)[0].item()]
+        corners_img_proj = np.array(shrinked_corners).astype(np.float32).reshape(1, 4, 2)
         self.img_non_zero_section = self.img[
             self.orig_rect_corners[0][1]:self.orig_rect_corners[2][1],
             self.orig_rect_corners[0][0]:self.orig_rect_corners[1][0]
         ]
 
+        # print(f'found aruco code {displayed_aruco_code} corners: {corners_img_proj}')
         # add corners_img_proj to gray
         frame_with_corners = cv2.aruco.drawDetectedMarkers(
             frame.copy(), np.array([corners_img_proj]), np.array([displayed_aruco_code])
         )
+        # add each corner as dot
+        for corner in corners_img_proj[0]:
+                corner = corner.astype(int)
+                cv2.circle(frame_with_corners, tuple(corner), 5, (255, 0, 0), -1)
+        
+
         plt.imshow(cv2.cvtColor(frame_with_corners, cv2.COLOR_BGR2RGB))
         plt.show()
         
@@ -307,6 +354,8 @@ class CaptureSystem:
         self.corners_img_proj = corners_img_proj
 
         self.H, _ = cv2.findHomography(corners_img_proj, img_non_zero_section_corners)
+
+        self.frame = frame
 
         frame_unwarped = cv2.warpPerspective(
             frame, self.H,
@@ -422,6 +471,9 @@ class CaptureSystem:
             plt.imshow(frame_unwarped)
             plt.show()
             captured[description] = frame_unwarped
+            # clear all plt
+            IPython.display.clear_output(wait=True)
+
 
         captured = {k: v.astype(np.float32) / 255.0 for k, v in captured.items()}
 
@@ -455,7 +507,11 @@ class CaptureSystem:
 
         augmentor = UOPC(C_tensor, P_tensor, anchors_gray, captured_gray, device='cpu')
 
-        with open('photometric_calibration.pkl', 'wb') as f:
+        photometric_calibrations_dir = './photometric_calibrations'
+        cur_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        target_path = os.path.join(photometric_calibrations_dir, f'photometric_calibration_{cur_time}.pkl')
+        os.makedirs(photometric_calibrations_dir, exist_ok=True)
+        with open(target_path, 'wb') as f:
             pickle.dump({
                 'augmentor': augmentor,
                 'H': self.H,

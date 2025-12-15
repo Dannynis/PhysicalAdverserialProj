@@ -1,3 +1,4 @@
+import datetime
 import cv2.aruco as aruco
 import pickle
 import time
@@ -14,6 +15,7 @@ import tempfile
 import os
 import cv2
 import tqdm 
+from consts import border_size, displayed_aruco_code, marker_size
 
 ic4.Library.init()
 
@@ -116,16 +118,13 @@ cap = GenericCapturer(url=url)
         
 
     
-border_size = 2
 
-displayed_aruco_code = 40
 
 # Define parameters for ArUco marker detection
 aruco_dict_type = cv2.aruco.DICT_6X6_250 # Change dictionary type if needed
 marker_length = 0.05  # Marker length in meters (adjust as needed)
 aruco_dict = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
 
-marker_size = 500  # Size in pixels
 
 proj_marker_image = cv2.aruco.generateImageMarker(aruco_dict, displayed_aruco_code, marker_size)
 
@@ -184,6 +183,8 @@ def capture_many_frames():
         if ids is not None:
             ids_flat = ids.flatten()
             for marker_id, corner in zip(ids_flat, corners):
+                if marker_id != displayed_aruco_code:
+                    continue
                 pts = corner.reshape((4, 2)).astype(int)
                 color = (0, 255, 255) if int(marker_id) == displayed_aruco_code else (0, 255, 0)
                 # draw the marker contour
@@ -252,15 +253,20 @@ def display_drawer():
 
     to_place = cv2.resize(proj_marker_image, (width+1, height+1), interpolation=cv2.INTER_AREA)
 
+    # resize to_place to account for border size
+    to_place = cv2.resize(to_place, (width+1 - 2*border_size, height+1 - 2*border_size), interpolation=cv2.INTER_AREA)
+    # pad to_place with border_size 
+    to_place = cv2.copyMakeBorder(to_place, border_size, border_size, border_size, border_size, cv2.BORDER_CONSTANT, value=255)
+
     img[img!=0] = to_place.flatten() 
 
-    img[a-border_size:b+border_size, c-border_size:c] = 255
+    # img[a-border_size:b+border_size, c-border_size:c] = 255
 
-    img[a-border_size:b+border_size, d:d+border_size] = 255
+    # img[a-border_size:b+border_size, d:d+border_size] = 255
 
-    img[a-border_size:a, c-border_size:d+border_size] = 255
+    # img[a-border_size:a, c-border_size:d+border_size] = 255
 
-    img[b:b+border_size, c-border_size:d+border_size] = 255
+    # img[b:b+border_size, c-border_size:d+border_size] = 255
 
 
     print('showing')
@@ -275,7 +281,13 @@ def display_drawer():
     else:
         cv2.waitKey(1)
 
-    orig_rect_corners = [(rect_corners[0][0], rect_corners[0][1]), (rect_corners[1][0], rect_corners[0][1]), (rect_corners[1][0], rect_corners[1][1]), (rect_corners[0][0], rect_corners[1][1])]
+    xs = np.array(rect_corners)[:,0]
+    ys = np.array(rect_corners)[:,1]
+
+    orig_rect_corners = [[xs.min(), ys.min()],
+                [xs.max(), ys.min()],
+                    [xs.max(), ys.max()],
+                    [xs.min(), ys.max()]]
     orig_proj_corners = np.array(orig_rect_corners) # np.array([[0, 0], [proj_marker_image.shape[1], 0], [proj_marker_image.shape[1], proj_marker_image.shape[0]], [0, proj_marker_image.shape[0]]], dtype=np.float32)
     orig_proj_striped_corners = np.array([[0, 0], [proj_marker_image.shape[1], 0], [proj_marker_image.shape[1], proj_marker_image.shape[0]], [0, proj_marker_image.shape[0]]], dtype=np.float32)
 
@@ -291,7 +303,7 @@ H = None
 img_non_zero_section = None
 
 def run_aruco_detector():
-    global H, to_place, orig_rect_corners, cap, displayed_aruco_code, img_non_zero_section
+    global H, to_place, orig_rect_corners, cap, displayed_aruco_code, img_non_zero_section, border_size
     ids = []
     detectorParams = cv2.aruco.DetectorParameters()
     detector = aruco.ArucoDetector(aruco_dict, detectorParams)
@@ -310,6 +322,8 @@ def run_aruco_detector():
             cv2.imshow("Frame", gray)
             cv2.waitKey(1)
             corners, ids, _ = detector.detectMarkers(gray)
+            # display the corners
+            
             if ids is None:
                 print("No markers detected, retrying...")
                 continue
@@ -325,7 +339,23 @@ def run_aruco_detector():
 
     img_non_zero_section = img[orig_rect_corners[0][1]:orig_rect_corners[2][1], orig_rect_corners[0][0]:orig_rect_corners[1][0]]
 
-    img_non_zero_section_corners = np.array([[0, 0], [img_non_zero_section.shape[1], 0], [img_non_zero_section.shape[1], img_non_zero_section.shape[0]], [0, img_non_zero_section.shape[0]]], dtype=np.float32)
+
+    # img_non_zero_section_corners = np.array([[0, 0], [img_non_zero_section.shape[1], 0], [img_non_zero_section.shape[1], img_non_zero_section.shape[0]], [0, img_non_zero_section.shape[0]]], dtype=np.float32)
+    # print(img_non_zero_section_corners)
+
+    # H, _ = cv2.findHomography(corners_img_proj, img_non_zero_section_corners)
+
+    # frame_unwarped = cv2.warpPerspective(frame, H,( img_non_zero_section.shape[1], img_non_zero_section.shape[0]))
+
+    # plt.imshow(to_place)
+    # plt.show()
+    # plt.imshow(frame_unwarped)
+    # plt.show()
+
+
+    # print('######################################')
+    img_non_zero_section_corners = np.array([[border_size, border_size], [img_non_zero_section.shape[1]-border_size, border_size], [img_non_zero_section.shape[1]-border_size, img_non_zero_section.shape[0]-border_size], [border_size, img_non_zero_section.shape[0] - border_size ]], dtype=np.float32)
+    # print(img_non_zero_section_corners)
 
     H, _ = cv2.findHomography(corners_img_proj, img_non_zero_section_corners)
 
@@ -483,7 +513,11 @@ def photometric_calibration():
 
     augmentor = UOPC(C_tensor, P_tensor, anchors_gray, captured_gray, device='cpu')
 
-    with open('photometric_calibration.pkl', 'wb') as f:
+    photometric_calibrations_dir = './photometric_calibrations'
+    cur_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    target_path = os.path.join(photometric_calibrations_dir, f'photometric_calibration_{cur_time}.pkl')
+    os.makedirs(photometric_calibrations_dir, exist_ok=True)
+    with open(target_path, 'wb') as f:
         pickle.dump({
             'augmentor': augmentor,
             'H': H,

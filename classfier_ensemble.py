@@ -45,6 +45,14 @@ dino_transform = transforms.Compose([
     transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
 ])
 
+# compile all models for speed
+# print("Compiling models for speed...")
+# inception_model = torch.compile(inception_model)
+# resnet_model = torch.compile(resnet_model)
+# vgg_model = torch.compile(vgg_model)
+# vit_model = torch.compile(vit_model)
+# dino_model = torch.compile(dino_model)
+
 # Use weights from one of the models for categories (they all use ImageNet)
 weights = inception_weights
 
