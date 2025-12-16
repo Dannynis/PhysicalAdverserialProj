@@ -78,6 +78,7 @@ Compared to these, PhotoAdv++ explicitly learns a per-pixel 3×3 color mixing ma
 - **Projection attacks**: Thys et al. (CVPRW 2019) on surveillance; Nassi et al. (2020) on ADAS phantom attacks.
 
 ### 3.3 Radiometric and photometric compensation
+- **Nayar et al. (PROCAMS 2003)** [Nayar03]: introduced per-pixel 3×3 color mixing matrices and per-pixel non-linear response curves for radiometric compensation in projector-camera systems—the foundation of our photometric model.
 - **Radiometric self-calibration** (Mitsunaga & Nayar, 1999); **Grossberg & Nayar (2004)**: camera response curves.
 - **Radiometric compensation** for projection on textured surfaces (Majumder & Brown, 2007; Grundhöfer & Bimber, 2008); **Spatial AR** (Bimber & Raskar, 2005). These works motivate per-pixel modeling essential for projection attacks.
 
@@ -120,7 +121,7 @@ We model captured RGB $C(x,y)$ from projected RGB $P(x,y)$ via:
 
 $$ C(x,y) = f_{x,y}\big( V_{x,y} \cdot P(x,y) \big), $$
 
-where $V_{x,y} \in \mathbb{R}^{3\times3}$ is a per-pixel color mixing matrix and $f_{x,y}$ is a per-pixel, per-channel monotone mapping obtained by interpolating measured grayscale responses.
+where $V_{x,y} \in \mathbb{R}^{3\times3}$ is a per-pixel color mixing matrix and $f_{x,y}$ is a per-pixel, per-channel monotone mapping obtained by interpolating measured grayscale responses. This formulation follows the radiometric compensation framework of **Nayar et al. (PROCAMS 2003)** [Nayar03], who introduced per-pixel color mixing matrices and non-linear response estimation for projector-camera systems, extended here to be fully differentiable for adversarial optimization.
 
 ### 5.1 Estimating the color mixing matrix
 Given $N$ calibration pairs $\{(P_n, C_n)\}_{n=1}^N$ at a pixel $(x,y)$, we solve a ridge regression:
@@ -256,6 +257,7 @@ Get-ChildItem -Path .\results | Sort-Object LastWriteTime -Descending | Select-O
 
 ## 15. Broader Resources (Selected)
 
+- [Nayar03] Nayar, S. K., Peri, H., Grossberg, M. D., & Belhumeur, P. N. (2003). "A Projection System with Radiometric Compensation for Screen Imperfections". PROCAMS 2003. https://www.cs.columbia.edu/CAVE/publications/pdfs/Nayar_PROCAMS03.pdf
 - Athalye et al., "Synthesizing Robust Adversarial Examples" (EOT), ICML 2018.
 - Brown et al., "Adversarial Patch", 2017.
 - Sharif et al., "Accessorize to a Crime: Real and Stealthy Attacks on State-of-the-Art Face Recognition", CCS 2016.
