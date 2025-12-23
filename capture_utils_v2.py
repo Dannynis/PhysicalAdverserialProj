@@ -12,7 +12,7 @@ import tempfile
 import os
 import cv2
 import tqdm 
-from consts import border_size, displayed_aruco_code, marker_size
+from consts import border_size, displayed_aruco_code, marker_size, aruco_dict_type
 import torch
 import torchvision
 from interp_comp_torch import UltraOptimizedProjectorCompensation5 as UOPC
@@ -106,12 +106,14 @@ class CaptureSystem:
         self.img = np.zeros((screen_res[1], screen_res[0], 3), np.uint8)
         
         # ArUco setup
-        self.aruco_dict_type = cv2.aruco.DICT_4X4_50
+        self.aruco_dict_type = aruco_dict_type
         self.marker_length = 0.05
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(self.aruco_dict_type)
         self.proj_marker_image = cv2.aruco.generateImageMarker(
             self.aruco_dict, displayed_aruco_code, marker_size
         )
+        # trim proj_marker_image brightness to 200
+        self.proj_marker_image = (self.proj_marker_image.astype(np.float32) / 255.0 * 200).astype(np.uint8)
         
         # Drawing state
         self.drawing = False
@@ -224,6 +226,11 @@ class CaptureSystem:
 
         pbar = tqdm.tqdm(total=1000, desc="Capturing frames")
         detectorParams = cv2.aruco.DetectorParameters()
+        # Enable corner refinement for tighter corner detection
+        detectorParams.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        detectorParams.cornerRefinementWinSize = 5
+        detectorParams.cornerRefinementMaxIterations = 50
+        detectorParams.cornerRefinementMinAccuracy = 0.01
         detector = aruco.ArucoDetector(self.aruco_dict, detectorParams)
 
         while True:
@@ -249,9 +256,9 @@ class CaptureSystem:
                     pts = corner.reshape((4, 2)).astype(int)
                     color = (0, 255, 255) if int(marker_id) == displayed_aruco_code else (0, 255, 0)
                     cv2.polylines(frame_copy, [pts], True, color, 2)
+                    cv2.imwrite(os.path.join(cap_dir, f'frame_{timestamp}.png'), frame)
 
             cv2.imshow('frame', frame_copy)
-            cv2.imwrite(os.path.join(cap_dir, f'frame_{timestamp}.png'), frame)
             pbar.update(1)
 
             if not ret:
@@ -272,11 +279,31 @@ class CaptureSystem:
         ids = []
         best_alpha = None
         detectorParams = cv2.aruco.DetectorParameters()
+        
+        # Enable corner refinement for more accurate corner detection
+        detectorParams.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        detectorParams.cornerRefinementWinSize = 5  # Window size for corner refinement
+        detectorParams.cornerRefinementMaxIterations = 50  # Max iterations for refinement
+        detectorParams.cornerRefinementMinAccuracy = 0.01  # Stop when accuracy is below this
+        
+        # Adaptive threshold parameters for better edge detection
+        detectorParams.adaptiveThreshConstant = 7
+        detectorParams.adaptiveThreshWinSizeMin = 3
+        detectorParams.adaptiveThreshWinSizeMax = 23
+        detectorParams.adaptiveThreshWinSizeStep = 10
+        
+        # Minimum marker perimeter rate (relative to image size)
+        detectorParams.minMarkerPerimeterRate = 0.01
+        detectorParams.maxMarkerPerimeterRate = 4.0
+        
+        # Polygonal approximation accuracy
+        detectorParams.polygonalApproxAccuracyRate = 0.03
+        
         detector = aruco.ArucoDetector(self.aruco_dict, detectorParams)
-        detectorParams.adaptiveThreshConstant = 5
         detected_corners = []
         marked_frames = 5
         while ids is None or len(detected_corners) < marked_frames:
+            IPython.display.clear_output(wait=True)
             print(f"{len(detected_corners)}/{marked_frames} marker corners detected.")
             for i in range(3):
                 ret, frame = self.cap.read()
@@ -296,6 +323,7 @@ class CaptureSystem:
                 corners, ids, _ = detector.detectMarkers(gray)
                 if ids is None or displayed_aruco_code not in ids.flatten():
                     print("No markers detected, retrying...")
+                    best_alpha = None
                     continue
                 else:
                     print(ids)
@@ -304,7 +332,7 @@ class CaptureSystem:
                         if ids[i] == displayed_aruco_code:
                             detected_corners.append(corner)
                 
-            IPython.display.clear_output(wait=True)
+           
 
         dc = np.array(detected_corners)
         center = np.floor(dc.reshape(-1, 2).mean(axis=0))
@@ -353,7 +381,7 @@ class CaptureSystem:
 
         self.corners_img_proj = corners_img_proj
 
-        self.H, _ = cv2.findHomography(corners_img_proj, img_non_zero_section_corners)
+        self.H = cv2.getPerspectiveTransform(corners_img_proj, img_non_zero_section_corners)
 
         self.frame = frame
 
@@ -402,6 +430,8 @@ class CaptureSystem:
 
         color_pattern = np.expand_dims(color_pattern, axis=-1).repeat(3, axis=-1)
         color_pattern[color_pattern != 0] = to_place.flatten()
+
+        self.color_pattern = color_pattern
 
         color_pattern_BGR = cv2.cvtColor(color_pattern, cv2.COLOR_RGB2BGR)
         cv2.imshow("Rectangle Window", color_pattern_BGR)
@@ -521,3 +551,234 @@ class CaptureSystem:
                 'orig_proj_striped_corners': self.orig_proj_striped_corners,
                 'orig_rect_corners': self.orig_rect_corners,
             }, f)
+
+    def calibrate_board_perpendicular(self, printed_aruco_id=9):
+        """
+        Calibrate the system when the board is perpendicular to the projector.
+        This captures reference ArUco corners that represent zero rotation.
+        
+        Args:
+            printed_aruco_id: ID of the printed ArUco marker on the board
+        
+        Returns:
+            reference_corners: The detected corners of the printed ArUco when board is perpendicular
+        """
+        detectorParams = cv2.aruco.DetectorParameters()
+        detector = aruco.ArucoDetector(self.aruco_dict, detectorParams)
+        
+        print(f"Position the board perpendicular to the projector.")
+        print(f"Looking for printed ArUco marker ID: {printed_aruco_id}")
+        print("Press 'c' to capture reference, 'q' to quit")
+        
+        reference_corners = None
+        
+        while reference_corners is None:
+            ret, frame = self.cap.read()
+            if not ret:
+                continue
+            
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            corners, ids, _ = detector.detectMarkers(gray)
+            
+            frame_viz = frame.copy()
+            if ids is not None:
+                cv2.aruco.drawDetectedMarkers(frame_viz, corners, ids)
+                
+                # Look for the printed ArUco
+                idx = np.where(ids.flatten() == printed_aruco_id)[0]
+                if len(idx) > 0:
+                    printed_corners = corners[idx[0]].reshape(4, 2)
+                    for corner in printed_corners:
+                        cv2.circle(frame_viz, tuple(corner.astype(int)), 5, (0, 255, 0), -1)
+                    cv2.putText(frame_viz, "Marker detected - Press 'c' to capture", 
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            else:
+                cv2.putText(frame_viz, f"Waiting for ArUco #{printed_aruco_id}...", 
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            cv2.imshow("Calibration", frame_viz)
+            key = cv2.waitKey(1) & 0xFF
+            
+            if key == ord('c') and ids is not None:
+                idx = np.where(ids.flatten() == printed_aruco_id)[0]
+                if len(idx) > 0:
+                    reference_corners = corners[idx[0]].reshape(4, 2)
+                    print(f"Reference captured! Corners: {reference_corners}")
+                    break
+            elif key == ord('q'):
+                break
+        
+        cv2.destroyAllWindows()
+        
+        self.reference_printed_corners = reference_corners
+        self.printed_aruco_id = printed_aruco_id
+        
+        return reference_corners
+
+    def calibrate_perpendicular_with_projection(self, printed_aruco_id=9):
+        """
+        Enhanced calibration that captures both the printed ArUco reference
+        AND the relationship between a projected square and how it appears in camera.
+        This establishes the projector->camera mapping when board is perpendicular.
+        
+        Args:
+            printed_aruco_id: ID of the printed ArUco marker on the board
+        
+        Returns:
+            tuple: (reference_printed_corners, reference_projected_corners_camera)
+        """
+        # First get the reference printed ArUco position
+        reference_corners = self.calibrate_board_perpendicular(printed_aruco_id)
+        
+        # Now project a square and see where it appears in camera space
+        print("\nProjecting reference square to establish projector->camera mapping...")
+        
+        # Project at original corners
+        cv2.namedWindow("Rectangle Window", cv2.WND_PROP_FULLSCREEN)
+        cv2.setWindowProperty("Rectangle Window", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        cv2.imshow("Rectangle Window", self.img)
+        cv2.imshow("Rectangle Window", self.img)
+        cv2.waitKey(1)
+        
+        import time
+        time.sleep(0.5)
+        
+        # Capture and detect the projected square corners in camera space
+        # We'll use the projected ArUco for this
+        detectorParams = cv2.aruco.DetectorParameters()
+        detector = aruco.ArucoDetector(self.aruco_dict, detectorParams)
+        
+        ret, frame = self.cap.read()
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        corners, ids, _ = detector.detectMarkers(gray)
+        
+        # Find the projected ArUco (displayed_aruco_code)
+        if ids is not None and displayed_aruco_code in ids.flatten():
+            idx = np.where(ids.flatten() == displayed_aruco_code)[0]
+            reference_projected_corners_camera = corners[idx[0]].reshape(4, 2)
+            
+            print(f"Reference projection corners in camera space: {reference_projected_corners_camera}")
+            
+            self.reference_projected_corners_camera = reference_projected_corners_camera
+            
+            return reference_corners, reference_projected_corners_camera
+        else:
+            raise ValueError("Could not detect projected ArUco marker. Make sure projection is visible.")
+
+    def compute_rotation_compensated_corners(self, printed_aruco_id=None, visualize=True):
+        """
+        Compute projection corners that compensate for board rotation.
+        
+        Correct approach using coordinate system transformations:
+        1. Detect how the printed ArUco moved in camera space (board rotation)
+        2. Compute how a projected square's corners would need to move in camera space
+           to maintain a square shape on the rotated board
+        3. Use the existing projector->camera mapping to find projector corners
+           that produce the desired camera-space corners
+        
+        Args:
+            printed_aruco_id: ID of the printed ArUco marker (uses self.printed_aruco_id if None)
+            visualize: Whether to show visualization of the detection
+        
+        Returns:
+            compensated_corners: New projection corners that will appear square on the rotated board
+        """
+        if printed_aruco_id is None:
+            if not hasattr(self, 'printed_aruco_id'):
+                raise ValueError("printed_aruco_id not set. Run calibrate_board_perpendicular() first.")
+            printed_aruco_id = self.printed_aruco_id
+        
+        if not hasattr(self, 'reference_printed_corners'):
+            raise ValueError("No reference corners found. Run calibrate_perpendicular_with_projection() first.")
+        
+        if not hasattr(self, 'reference_projected_corners_camera'):
+            raise ValueError("No projection reference. Run calibrate_perpendicular_with_projection() first.")
+        
+        # Detect current position of printed ArUco
+        detectorParams = cv2.aruco.DetectorParameters()
+        detector = aruco.ArucoDetector(self.aruco_dict, detectorParams)
+        
+        ret, frame = self.cap.read()
+        if not ret:
+            raise ValueError("Failed to capture frame")
+        
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        corners, ids, _ = detector.detectMarkers(gray)
+        
+        if ids is None or printed_aruco_id not in ids.flatten():
+            raise ValueError(f"Printed ArUco marker #{printed_aruco_id} not detected")
+        
+        # Get current corners of the printed marker in camera space
+        idx = np.where(ids.flatten() == printed_aruco_id)[0]
+        current_printed_corners = corners[idx[0]].reshape(4, 2)
+        
+        if visualize:
+            frame_viz = frame.copy()
+            cv2.aruco.drawDetectedMarkers(frame_viz, corners, ids)
+            for i, corner in enumerate(current_printed_corners):
+                cv2.circle(frame_viz, tuple(corner.astype(int)), 5, (255, 0, 0), -1)
+            for i, corner in enumerate(self.reference_printed_corners):
+                cv2.circle(frame_viz, tuple(corner.astype(int)), 7, (0, 255, 0), 2)
+            plt.figure(figsize=(12, 8))
+            plt.imshow(cv2.cvtColor(frame_viz, cv2.COLOR_BGR2RGB))
+            plt.title("Current (blue filled) vs Reference (green hollow)")
+            plt.show()
+        
+        # Compute homography: how did the board rotate in camera space?
+        H_board_rotation_camera, _ = cv2.findHomography(
+            self.reference_printed_corners.astype(np.float32),
+            current_printed_corners.astype(np.float32)
+        )
+        
+        # Apply the same rotation to the reference projected corners
+        # This tells us where the projection corners SHOULD appear in camera space
+        # to maintain the same shape on the rotated board
+        ref_proj_homogeneous = np.hstack([
+            self.reference_projected_corners_camera,
+            np.ones((4, 1))
+        ])
+        
+        target_proj_camera_homogeneous = (H_board_rotation_camera @ ref_proj_homogeneous.T).T
+        target_proj_camera = target_proj_camera_homogeneous[:, :2] / target_proj_camera_homogeneous[:, 2:3]
+        
+        # Now we need to find projector corners that will produce target_proj_camera
+        # We use the inverse of the existing projector->camera homography
+        # The existing H maps from camera content space to camera view
+        # We need projector screen -> camera view mapping
+        
+        # Create a homography from original projector corners to their camera appearance
+        H_proj_to_camera, _ = cv2.findHomography(
+            self.orig_proj_corners.astype(np.float32),
+            self.reference_projected_corners_camera.astype(np.float32)
+        )
+        
+        # Invert to get camera -> projector mapping
+        H_camera_to_proj = np.linalg.inv(H_proj_to_camera)
+        
+        # Map target camera corners back to projector space
+        target_camera_homogeneous = np.hstack([
+            target_proj_camera,
+            np.ones((4, 1))
+        ])
+        
+        compensated_homogeneous = (H_camera_to_proj @ target_camera_homogeneous.T).T
+        compensated_corners = compensated_homogeneous[:, :2] / compensated_homogeneous[:, 2:3]
+        
+        if visualize:
+            print("="*60)
+            print("COORDINATE SPACES:")
+            print("="*60)
+            print("\n1. PROJECTOR SPACE (screen pixels):")
+            print("   Original projection corners:", self.orig_proj_corners)
+            print("   Compensated corners:", compensated_corners)
+            print("\n2. CAMERA SPACE (camera pixels):")
+            print("   Reference printed ArUco:", self.reference_printed_corners)
+            print("   Current printed ArUco:", current_printed_corners)
+            print("   Reference projected corners (perpendicular):", self.reference_projected_corners_camera)
+            print("   Target projected corners (rotated):", target_proj_camera)
+            print("\n3. TRANSFORMATIONS:")
+            print("   Board rotation (camera space):")
+            print("   ", H_board_rotation_camera)
+            print("="*60)
+        
+        return compensated_corners.astype(np.float32)
