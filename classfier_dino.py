@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 import torch.nn as nn
 from torchvision.models import efficientnet_b4, EfficientNet_B4_Weights
-
+from consts import orig_clases
 import torch
 from torchvision import transforms
 
@@ -35,7 +35,7 @@ batch_size = 1
 # orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661, 864]).cuda()
 # orig_clases = torch.tensor([761]).cuda() # remote control
 # orig_clases = torch.tensor([954]).cuda() # banana
-orig_clases = torch.tensor([899]).cuda() # water jug
+# orig_clases = torch.tensor([899]).cuda() # water jug
 total_clases_without_orig = torch.tensor([x for x in list(range(0, 1000)) if x not in orig_clases]).cuda()
 
 

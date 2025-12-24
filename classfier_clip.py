@@ -4,8 +4,9 @@ from PIL import Image
 from torchvision.models import efficientnet_b4, EfficientNet_B4_Weights
 import cv2
 import torchvision
+from consts import orig_clases
 
-orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661]).cuda()
+# orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661]).cuda()
 total_clases_without_orig = torch.tensor([x for x in list(range(0, 1000)) if x not in orig_clases]).cuda()
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -3,6 +3,7 @@ from torchvision.io import read_image
 from torchvision.models import resnet50, ResNet50_Weights
 import torchvision
 import torch
+from consts import orig_clases
 
 weights = ResNet50_Weights.DEFAULT
 model = resnet50(weights=weights)
@@ -48,7 +49,7 @@ def resnet_predict_raw(image):
 
 
 batch_size = 1
-orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661]).cuda()
+# orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661]).cuda()
 total_clases_without_orig = torch.tensor([x for x in list(range(0, 1000)) if x not in orig_clases]).cuda()
 
 

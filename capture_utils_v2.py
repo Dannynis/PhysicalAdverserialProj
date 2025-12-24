@@ -17,7 +17,10 @@ import torch
 import torchvision
 from interp_comp_torch import UltraOptimizedProjectorCompensation5 as UOPC
 
-ic4.Library.init()
+try:
+    ic4.Library.init()
+except Exception as e:
+    print(e)
 
 def bmp_roundtrip(m):
     with tempfile.NamedTemporaryFile(suffix='.bmp', delete=False) as temp_file:

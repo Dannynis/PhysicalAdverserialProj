@@ -6,7 +6,7 @@ from torchvision.models import inception_v3, Inception_V3_Weights
 # from torchvision.models import vit_l_16, ViT_L_16_Weights
 import torchvision
 import torch
-
+from consts import orig_clases
 # weights = ViT_L_16_Weights.IMAGENET1K_SWAG_E2E_V1
 # model = vit_l_16(weights=weights)
 # weights = EfficientNet_B4_Weights.IMAGENET1K_V1
@@ -54,7 +54,7 @@ def predict_raw(image):
 
 
 batch_size = 1
-orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661]).cuda()
+# orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661]).cuda()
 total_clases_without_orig = torch.tensor([x for x in list(range(0, 1000)) if x not in orig_clases]).cuda()
 
 

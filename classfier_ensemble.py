@@ -10,10 +10,11 @@ from torchvision.models import (
     vgg16, VGG16_Weights,
     vit_b_16, ViT_B_16_Weights
 )
+from consts import orig_clases
 
 # Initialize all models
 print("Loading ensemble models...")
-
+model = 'ensamble_classifier'
 # 1. Inception V3
 inception_weights = Inception_V3_Weights.IMAGENET1K_V1
 inception_model = inception_v3(weights=inception_weights)
@@ -47,11 +48,16 @@ dino_transform = transforms.Compose([
 
 # compile all models for speed
 # print("Compiling models for speed...")
-# inception_model = torch.compile(inception_model)
-# resnet_model = torch.compile(resnet_model)
-# vgg_model = torch.compile(vgg_model)
-# vit_model = torch.compile(vit_model)
-# dino_model = torch.compile(dino_model)
+# inception_model = torch.compile(inception_model, mode="reduce-overhead")
+# print('compiled inception')
+# resnet_model = torch.compile(resnet_model, mode="reduce-overhead")
+# print('compiled resnet')
+# vgg_model = torch.compile(vgg_model, mode="reduce-overhead")
+# print('compiled vgg')
+# vit_model = torch.compile(vit_model, mode="reduce-overhead")
+# print('compiled vit')
+# dino_model = torch.compile(dino_model, mode="reduce-overhead")
+# print('compiled dino')
 
 # Use weights from one of the models for categories (they all use ImageNet)
 weights = inception_weights
@@ -274,7 +280,7 @@ def ensemble_predict(image):
 # Target classes configuration
 batch_size = 1
 # orig_clases = torch.tensor([899]).cuda()  # water jug (default from dino)
-orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661, 864]).cuda()
+# orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661, 864]).cuda()
 
 total_clases_without_orig = torch.tensor(
     [x for x in list(range(0, 1000)) if x not in orig_clases]

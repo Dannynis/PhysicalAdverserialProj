@@ -10,6 +10,7 @@ from torchvision.models import (
     mobilenet_v3_large, MobileNet_V3_Large_Weights,
     swin_b, Swin_B_Weights
 )
+from consts import orig_clases
 
 # Initialize all models
 print("Loading ensemble v2 models...")
@@ -229,7 +230,7 @@ def ensemble_predict(image):
 # Target classes configuration
 batch_size = 1
 # orig_clases = torch.tensor([899]).cuda()  # water jug (default from dino)
-orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661, 864]).cuda()
+# orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661, 864]).cuda()
 
 total_clases_without_orig = torch.tensor(
     [x for x in list(range(0, 1000)) if x not in orig_clases]
