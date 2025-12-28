@@ -23,24 +23,13 @@ except Exception as e:
     print(e)
 
 def bmp_roundtrip(m):
-    with tempfile.NamedTemporaryFile(suffix='.bmp', delete=False) as temp_file:
-        temp_path = temp_file.name
-
-    try:
-        # Save to temporary BMP file
-        m.save_as_bmp(temp_path)
-        
-        # Read back with cv2
-        cv2_image_bmp = cv2.imread(temp_path, cv2.IMREAD_COLOR)
-        cv2_image_bmp = cv2.cvtColor(cv2_image_bmp, cv2.COLOR_BGR2RGB)
-        
-        return cv2_image_bmp
-        
-    finally:
-        # Clean up temp file
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-
+    cv2_image = m.numpy_copy()
+    
+    # Demosaic Bayer pattern to color
+    # Try COLOR_BAYER_BG2RGB first, if colors are wrong try: GB2RGB, RG2RGB, GR2RGB
+    cv2_image = cv2.cvtColor(cv2_image, cv2.COLOR_BAYER_BG2RGB)
+    
+    return cv2_image
 
 class GenericCapturer:
     _ic4_initialized = False
@@ -256,10 +245,11 @@ class CaptureSystem:
             if ids is not None:
                 ids_flat = ids.flatten()
                 for marker_id, corner in zip(ids_flat, corners):
-                    pts = corner.reshape((4, 2)).astype(int)
-                    color = (0, 255, 255) if int(marker_id) == displayed_aruco_code else (0, 255, 0)
-                    cv2.polylines(frame_copy, [pts], True, color, 2)
-                    cv2.imwrite(os.path.join(cap_dir, f'frame_{timestamp}.png'), frame)
+                    if marker_id == displayed_aruco_code:
+                        pts = corner.reshape((4, 2)).astype(int)
+                        color = (0, 255, 255) if int(marker_id) == displayed_aruco_code else (0, 255, 0)
+                        cv2.polylines(frame_copy, [pts], True, color, 2)
+                        cv2.imwrite(os.path.join(cap_dir, f'frame_{timestamp}.png'), frame)
 
             cv2.imshow('frame', frame_copy)
             pbar.update(1)

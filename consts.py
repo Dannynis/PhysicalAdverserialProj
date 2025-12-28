@@ -11,6 +11,7 @@ aruco_dict_type = cv2.aruco.DICT_4X4_50  # ArUco dictionary type
 
 latent_size = 16  # Spatial size of the latent (latent shape will be [batch, 4, latent_size, latent_size])
 
-latent_batch_size = 25  # Number of patches in the latent batch
+latent_batch_size = 11  # Number of patches in the latent batch
 
 orig_clases = torch.tensor([817, 705, 609, 586, 436, 627, 468, 621, 803, 407, 408, 751, 717,866, 661, 864]).cuda()
+# orig_clases = torch.tensor([852,722,574]).cuda()
