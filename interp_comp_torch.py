@@ -138,15 +138,21 @@ class UltraOptimizedProjectorCompensation5(torch.nn.Module):
 
         return sorted_x_data, sorted_y_data
     
-    def forward(self, input_image):
+    def forward(self, input_image, mode='full'):
         """
-        Ultra-optimized forward pass for projector compensation
+        Fully vectorized forward pass for projector-camera SIMULATION.
+        No loops - everything is batched across channels too.
+        
+        Simulates what a camera would capture when projector displays input_image.
         
         Args:
-            input_image: (3, H, W) - Input image to compensate
+            input_image: (batch_size, 3, H, W) - Projector input image [0, 1]
+            mode: str - 'full' or 'color_only'
+                - 'full': Apply both interpolation (projector response) AND color mixing V
+                - 'color_only': Apply ONLY color mixing V (skip interpolation)
             
         Returns:
-            compensated_image: (3, H, W) - Compensated output image
+            simulated_capture: (batch_size, 3, H, W) - Predicted camera capture
         """
         # Ensure input is on correct device and dtype
         if input_image.device != torch.device(self.device):
@@ -154,42 +160,99 @@ class UltraOptimizedProjectorCompensation5(torch.nn.Module):
         if input_image.dtype != torch.float32:
             input_image = input_image.float()
         
-        # Step 1: Apply color mixing matrix transformation
-        # Reshape for vectorized matrix multiplication
-        proj_tex_flat = input_image.view(3, -1).permute(1, 0)  # (H*W, 3)
-        V_flat = self.V.view(-1, 3, 3)  # (H*W, 3, 3)
+        # Handle single image without batch dim
+        squeeze_output = False
+        if input_image.ndim == 3:
+            input_image = input_image.unsqueeze(0)
+            squeeze_output = True
         
-        # Vectorized matrix multiplication: (H*W, 1, 3) @ (H*W, 3, 3) -> (H*W, 3)
-        p_v_flat = torch.bmm(proj_tex_flat.unsqueeze(1), V_flat).squeeze(1)
+        batch_size = input_image.shape[0]
         
-        # Reshape for interpolation: (H*W, 3) -> (3, H, W)
-        p_v_reshaped = p_v_flat.view(self.H, self.W, 3).permute(2, 0, 1)
-        
-        # Step 2: Ultra-fast vectorized interpolation
-        compensated_image = torch.zeros_like(p_v_reshaped)
-        
-        for c in range(3):
-            # Get interpolation data for this channel
-            x_vals = self.x_data_tensor[c]  # (H, W, n_samples)
-            y_vals = self.y_data_tensor[c]  # (H, W, n_samples)
-            xi = p_v_reshaped[c]            # (H, W)
+        if mode == 'full':
+            # ============================================================
+            # Step 1: Fully vectorized projector response (no channel loop)
+            # ============================================================
+            # Flatten channels into spatial: treat as (batch, 3*H*W) problem
             
-            # Vectorized searchsorted for all pixels simultaneously
-            xi_expanded = xi.unsqueeze(-1)  # (H, W, 1)
-            indices = torch.searchsorted(x_vals, xi_expanded, right=False)
-            indices = torch.clamp(indices, 1, self.n_samples - 1).squeeze(-1)
+            # x_data_tensor: (3, H, W, n_samples) -> (3*H*W, n_samples)
+            x_flat = self.x_data_tensor.reshape(-1, self.n_samples)
+            y_flat = self.y_data_tensor.reshape(-1, self.n_samples)
             
-            # Vectorized linear interpolation using advanced indexing
-            x0 = x_vals[self.h_idx, self.w_idx, indices - 1]
-            x1 = x_vals[self.h_idx, self.w_idx, indices]
-            y0 = y_vals[self.h_idx, self.w_idx, indices - 1]
-            y1 = y_vals[self.h_idx, self.w_idx, indices]
+            # input_image: (batch, 3, H, W) -> (batch, 3*H*W)
+            xi_flat = input_image.reshape(batch_size, -1)
+            
+            # Expand for searchsorted: (batch, 3*H*W, 1)
+            xi_expanded = xi_flat.unsqueeze(-1)
+            
+            # Expand x_flat for batch: (1, 3*H*W, n_samples) -> (batch, 3*H*W, n_samples)
+            # Use contiguous() to avoid view issues later
+            x_flat_exp = x_flat.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+            
+            # Vectorized searchsorted across all batch, channels, and pixels at once
+            # Result: (batch, 3*H*W, 1)
+            indices = torch.searchsorted(x_flat_exp, xi_expanded, right=False)
+            indices = torch.clamp(indices, 1, self.n_samples - 1).squeeze(-1)  # (batch, 3*H*W)
+            
+            # Gather interpolation points using gather (more efficient than advanced indexing)
+            # indices: (batch, 3*H*W) -> need (batch, 3*H*W, 1) for gather on dim=-1
+            idx_gather = indices.unsqueeze(-1)  # (batch, 3*H*W, 1)
+            idx_gather_m1 = (indices - 1).unsqueeze(-1)
+            
+            # Expand y_flat for batch: (batch, 3*H*W, n_samples)
+            y_flat_exp = y_flat.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+            
+            # Gather: select from last dimension
+            x0 = torch.gather(x_flat_exp, -1, idx_gather_m1).squeeze(-1)  # (batch, 3*H*W)
+            x1 = torch.gather(x_flat_exp, -1, idx_gather).squeeze(-1)
+            y0 = torch.gather(y_flat_exp, -1, idx_gather_m1).squeeze(-1)
+            y1 = torch.gather(y_flat_exp, -1, idx_gather).squeeze(-1)
             
             # Linear interpolation: y = y0 + α(y1 - y0)
-            alpha = (xi - x0) / (x1 - x0 + 1e-8)
-            compensated_image[c] = y0 + alpha * (y1 - y0)
+            alpha = (xi_flat - x0) / (x1 - x0 + 1e-8)
+            after_response_flat = y0 + alpha * (y1 - y0)  # (batch, 3*H*W)
+            
+            # Reshape: (batch, 3*H*W) -> (batch, H*W, 3)
+            after_response_hwc = after_response_flat.reshape(batch_size, 3, self.H * self.W).permute(0, 2, 1)
         
-        return compensated_image
+        elif mode == 'color_only':
+            # ============================================================
+            # Skip interpolation, directly use input for color mixing
+            # ============================================================
+            # Reshape input: (batch, 3, H, W) -> (batch, H*W, 3)
+            after_response_hwc = input_image.reshape(batch_size, 3, self.H * self.W).permute(0, 2, 1)
+        
+        else:
+            raise ValueError(f"Unknown mode '{mode}'. Use 'full' or 'color_only'.")
+        
+        # ============================================================
+        # Step 2: Vectorized color mixing matrix V application
+        # ============================================================
+        # V_flat: (H*W, 3, 3) -> expand to (batch, H*W, 3, 3)
+        V_flat = self.V.reshape(-1, 3, 3).unsqueeze(0).expand(batch_size, -1, -1, -1)
+        
+        # Batched matrix multiplication: (batch, H*W, 1, 3) @ (batch, H*W, 3, 3) -> (batch, H*W, 1, 3)
+        simulated_flat = torch.matmul(after_response_hwc.unsqueeze(2), V_flat).squeeze(2)
+        
+        # Reshape back: (batch, H*W, 3) -> (batch, 3, H, W)
+        simulated_capture = simulated_flat.reshape(batch_size, self.H, self.W, 3).permute(0, 3, 1, 2)
+        
+        if squeeze_output:
+            simulated_capture = simulated_capture.squeeze(0)
+        
+        return simulated_capture
+    
+    def _forward_single(self, input_image):
+        """
+        Forward pass for a single image (no batch dimension).
+        Kept for backward compatibility.
+        
+        Args:
+            input_image: (3, H, W) - Single projector input image [0, 1]
+            
+        Returns:
+            simulated_capture: (3, H, W) - Predicted camera capture
+        """
+        return self.forward(input_image.unsqueeze(0)).squeeze(0)
     
     def process_batch(self, batch_images):
         """
