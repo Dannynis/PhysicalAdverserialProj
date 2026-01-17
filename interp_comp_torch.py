@@ -239,7 +239,7 @@ class UltraOptimizedProjectorCompensation5(torch.nn.Module):
         if squeeze_output:
             simulated_capture = simulated_capture.squeeze(0)
         
-        return simulated_capture
+        return simulated_capture.clamp(0.0, 1.0)
     
     def _forward_single(self, input_image):
         """

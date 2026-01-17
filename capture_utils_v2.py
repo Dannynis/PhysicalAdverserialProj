@@ -87,7 +87,7 @@ class GenericCapturer:
 
 
 class CaptureSystem:
-    def __init__(self, url='http://192.168.68.61:8080/video', screen_res=(1920*2, 1080*2)):
+    def __init__(self, url='http://192.168.68.61:8080/video', screen_res=(1920, 1080)):
         """Initialize the capture system with all parameters as instance variables."""
         # Camera setup
         self.url = url
@@ -105,7 +105,7 @@ class CaptureSystem:
             self.aruco_dict, displayed_aruco_code, marker_size
         )
         # trim proj_marker_image brightness to 200
-        self.proj_marker_image = (self.proj_marker_image.astype(np.float32) / 255.0 * 200).astype(np.uint8)
+        # self.proj_marker_image = (self.proj_marker_image.astype(np.float32) / 255.0 * 200).astype(np.uint8)
         
         # Drawing state
         self.drawing = False
@@ -147,7 +147,10 @@ class CaptureSystem:
         cv2.setWindowProperty("Rectangle Window", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.setMouseCallback("Rectangle Window", self._draw_rectangle)
 
+
         while True:
+            ret, frame = self.cap.read()
+            cv2.imshow("Camera Feed", frame)
             cv2.imshow("Rectangle Window", self.img)
             wk = cv2.waitKey(10)
             if wk == 27 or wk == 99:  # ESC or 'c' key
@@ -279,18 +282,23 @@ class CaptureSystem:
         detectorParams.cornerRefinementMaxIterations = 50  # Max iterations for refinement
         detectorParams.cornerRefinementMinAccuracy = 0.01  # Stop when accuracy is below this
         
-        # Adaptive threshold parameters for better edge detection
+        # Adaptive threshold parameters - more lenient for better detection
         detectorParams.adaptiveThreshConstant = 7
         detectorParams.adaptiveThreshWinSizeMin = 3
-        detectorParams.adaptiveThreshWinSizeMax = 23
-        detectorParams.adaptiveThreshWinSizeStep = 10
+        detectorParams.adaptiveThreshWinSizeMax = 53  # Increased for more threshold attempts
+        detectorParams.adaptiveThreshWinSizeStep = 4   # Smaller steps = more attempts
         
-        # Minimum marker perimeter rate (relative to image size)
-        detectorParams.minMarkerPerimeterRate = 0.01
-        detectorParams.maxMarkerPerimeterRate = 4.0
+        # Minimum marker perimeter rate - more lenient to detect various sizes
+        detectorParams.minMarkerPerimeterRate = 0.005  # Lower = allows smaller markers
+        detectorParams.maxMarkerPerimeterRate = 8.0    # Higher = allows larger markers
         
-        # Polygonal approximation accuracy
-        detectorParams.polygonalApproxAccuracyRate = 0.03
+        # Polygonal approximation accuracy - more lenient
+        detectorParams.polygonalApproxAccuracyRate = 0.05  # Higher = more forgiving
+        
+        # Additional lenient parameters for difficult detection
+        detectorParams.minCornerDistanceRate = 0.01    # Allow closer corners
+        detectorParams.minMarkerDistanceRate = 0.01    # Allow markers closer together
+        detectorParams.errorCorrectionRate = 0.9       # Higher = more error tolerance
         
         detector = aruco.ArucoDetector(self.aruco_dict, detectorParams)
         detected_corners = []
@@ -404,10 +412,8 @@ class CaptureSystem:
         frame_unwarped = cv2.cvtColor(frame_unwarped, cv2.COLOR_BGR2RGB)
         return frame_unwarped
 
-    def plot_on_screen(self, pimg, back_image=None):
-        """Display an image on the projection screen."""
-        cv2.namedWindow("Rectangle Window", cv2.WND_PROP_FULLSCREEN)
-        cv2.setWindowProperty("Rectangle Window", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    def get_placed_image(self,pimg, back_image=None):
 
         if back_image is not None:
             color_pattern = back_image.copy()
@@ -425,6 +431,15 @@ class CaptureSystem:
         color_pattern[color_pattern != 0] = to_place.flatten()
 
         self.color_pattern = color_pattern
+        return color_pattern
+    
+    def plot_on_screen(self, pimg, back_image=None):
+        """Display an image on the projection screen."""
+
+        color_pattern = self.get_placed_image(pimg, back_image=back_image)
+
+        cv2.namedWindow("Rectangle Window", cv2.WND_PROP_FULLSCREEN)
+        cv2.setWindowProperty("Rectangle Window", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
         color_pattern_BGR = cv2.cvtColor(color_pattern, cv2.COLOR_RGB2BGR)
         cv2.imshow("Rectangle Window", color_pattern_BGR)
@@ -435,12 +450,15 @@ class CaptureSystem:
 
         time.sleep(1)
 
-    def photometric_calibration(self):
+
+    def photometric_calibration(self, return_captured=False):
         """Perform photometric calibration."""
         proj_wh = (512, 512)
         low_val = 80 / 255
         high_val = 170 / 255
         n_samples_per_channel = 20
+        n_samples_middle = 10
+        middle_focus = False
         resizer = torchvision.transforms.Resize((self.height, self.width))
 
         patterns = {
@@ -468,9 +486,17 @@ class CaptureSystem:
         patterns["red_image_3"][:, :, 0] = low_val
         patterns["green_image_3"][:, :, 1] = low_val
         patterns["blue_image_3"][:, :, 2] = low_val
+        
 
         input_values = np.linspace(0.0, 1.0, num=n_samples_per_channel)
-        for i in range(n_samples_per_channel):
+        if middle_focus:
+            focosed_samples = np.linspace(0.2, 0.5, num=n_samples_middle)
+            input_values = np.sort(np.concatenate((
+                input_values,
+                focosed_samples
+            )))
+
+        for i in range(len(input_values)):
             patterns["gray_{:03d}".format(i)] = (
                 np.ones(proj_wh + (3,), dtype=np.float32) * input_values[i]
             )
@@ -485,6 +511,9 @@ class CaptureSystem:
 
             time.sleep(0.05)
             unwarped_frames = []
+            # clear buffer
+            for i in range(3):
+                _ = cap.read()
             for i in range(1):
                 cur_unwraped = self.cap_and_uwarp()
                 unwarped_frames.append(cur_unwraped)
@@ -544,6 +573,8 @@ class CaptureSystem:
                 'orig_proj_striped_corners': self.orig_proj_striped_corners,
                 'orig_rect_corners': self.orig_rect_corners,
             }, f)
+        if return_captured:
+            return (patterns, captured, augmentor)
 
     def calibrate_board_perpendicular(self, printed_aruco_id=9):
         """
