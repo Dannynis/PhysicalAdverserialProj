@@ -36,7 +36,7 @@ class GenericCapturer:
     _global_grab = None
     _global_sink = None
 
-    def __init__(self, url=None):
+    def __init__(self, url=None, disable_auto_settings=False):
         if GenericCapturer._ic4_initialized:
             print("IC4 already opened, using existing grabber and sink.")
             self.grabber = GenericCapturer._global_grab
@@ -54,28 +54,29 @@ class GenericCapturer:
             grabber.device_open(first_device_info)
             GenericCapturer._ic4_initialized = True
 
-            # Disable automatic adjustments to get consistent raw data
-            try:
-                props = grabber.device_property_map
-                # Try to disable gamma, auto exposure, auto gain using string property names
-                for prop_name in ['GammaEnable', 'Gamma']:
-                    try:
-                        prop = props.find(prop_name)
-                        if prop is not None:
-                            prop.value = False
-                            print(f"{prop_name} disabled")
-                    except:
-                        pass
-                for prop_name in ['ExposureAuto', 'GainAuto', 'BalanceWhiteAuto']:
-                    try:
-                        prop = props.find(prop_name)
-                        if prop is not None:
-                            prop.value = 'Off'
-                            print(f"{prop_name} set to Off")
-                    except:
-                        pass
-            except Exception as e:
-                print(f"Warning: Could not disable some auto settings: {e}")
+            # Optionally disable automatic adjustments to get consistent raw data
+            if disable_auto_settings:
+                try:
+                    props = grabber.device_property_map
+                    # Try to disable gamma, auto exposure, auto gain using string property names
+                    for prop_name in ['GammaEnable', 'Gamma']:
+                        try:
+                            prop = props.find(prop_name)
+                            if prop is not None:
+                                prop.value = False
+                                print(f"{prop_name} disabled")
+                        except:
+                            pass
+                    for prop_name in ['ExposureAuto', 'GainAuto', 'BalanceWhiteAuto']:
+                        try:
+                            prop = props.find(prop_name)
+                            if prop is not None:
+                                prop.value = 'Off'
+                                print(f"{prop_name} set to Off")
+                        except:
+                            pass
+                except Exception as e:
+                    print(f"Warning: Could not disable some auto settings: {e}")
 
             # Create a SnapSink - let it use camera's native format
             sink = ic4.SnapSink()
@@ -109,11 +110,17 @@ class GenericCapturer:
 
 
 class CaptureSystem:
-    def __init__(self, url='http://192.168.68.61:8080/video', screen_res=(1920, 1080)):
-        """Initialize the capture system with all parameters as instance variables."""
+    def __init__(self, url='http://192.168.68.61:8080/video', screen_res=(1920, 1080), disable_auto_settings=False):
+        """Initialize the capture system with all parameters as instance variables.
+        
+        Args:
+            url: Camera URL for non-IC4 capture
+            screen_res: Screen resolution tuple (width, height)
+            disable_auto_settings: If True, disables auto exposure, auto gain, auto white balance
+        """
         # Camera setup
         self.url = url
-        self.cap = GenericCapturer(url=self.url)
+        self.cap = GenericCapturer(url=self.url, disable_auto_settings=disable_auto_settings)
         
         # Screen and image parameters
         self.screen_res = screen_res
