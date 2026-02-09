@@ -22,10 +22,14 @@ try:
 except Exception as e:
     print(e)
 
-def bmp_roundtrip(m):
+def bmp_roundtrip(m, is_processed_format=False):
     cv2_image = m.numpy_copy()
     
-    # Demosaic Bayer pattern to color
+    if is_processed_format:
+        # Already in RGB/BGR format from IC4's ISP - no demosaic needed
+        return cv2_image
+    
+    # Manual demosaic for raw Bayer pattern (legacy fallback)
     # Try COLOR_BAYER_BG2RGB first, if colors are wrong try: GB2RGB, RG2RGB, GR2RGB
     cv2_image = cv2.cvtColor(cv2_image, cv2.COLOR_BAYER_BG2RGB)
     
@@ -35,13 +39,23 @@ class GenericCapturer:
     _ic4_initialized = False
     _global_grab = None
     _global_sink = None
+    _is_processed_format = False
 
-    def __init__(self, url=None, disable_auto_settings=False):
+    def __init__(self, url=None, disable_auto_settings=False, use_processed_format=True):
+        """Initialize the capturer.
+        
+        Args:
+            url: Camera URL for non-IC4 capture
+            disable_auto_settings: If True, disables auto exposure, auto gain, auto white balance
+            use_processed_format: If True, use IC4's ISP to get processed BGR8 output (matches demo app).
+                                  If False, use raw Bayer format with manual demosaic.
+        """
         if GenericCapturer._ic4_initialized:
             print("IC4 already opened, using existing grabber and sink.")
             self.grabber = GenericCapturer._global_grab
             self.sink = GenericCapturer._global_sink
             self.ic4 = True
+            self.is_processed_format = GenericCapturer._is_processed_format
             return
         
         # check if ic4 is imported
@@ -78,29 +92,48 @@ class GenericCapturer:
                 except Exception as e:
                     print(f"Warning: Could not disable some auto settings: {e}")
 
-            # Create a SnapSink - let it use camera's native format
-            sink = ic4.SnapSink()
-            print("SnapSink created (using camera native format)")
+            # Create a SnapSink with the appropriate format
+            if use_processed_format:
+                # Use IC4's ISP to convert Bayer to BGR8 - matches demo app output
+                try:
+                    sink = ic4.SnapSink(ic4.PixelFormat.BGR8)
+                    print("SnapSink created with BGR8 format (IC4 ISP processing - matches demo app)")
+                    self.is_processed_format = True
+                except Exception as e:
+                    print(f"Warning: Could not create BGR8 sink ({e}), falling back to native format")
+                    sink = ic4.SnapSink()
+                    self.is_processed_format = False
+            else:
+                # Use camera's native Bayer format with manual demosaic
+                sink = ic4.SnapSink()
+                print("SnapSink created (using camera native format)")
+                self.is_processed_format = False
+            
             grabber.stream_setup(sink, setup_option=ic4.StreamSetupOption.ACQUISITION_START)
             self.grabber = grabber
             self.sink = sink
 
             GenericCapturer._global_grab = grabber
             GenericCapturer._global_sink = sink
+            GenericCapturer._is_processed_format = self.is_processed_format
             print("IC4 Grabber and Sink initialized.")
         else:
             cap = cv2.VideoCapture(url)
             self.cap = cap
             self.ic4 = False
+            self.is_processed_format = False
 
     def read(self):
         if self.ic4:
             m = self.sink.snap_single(1000)
             if m is None:
                 return None
-            cap = bmp_roundtrip(m)
+            cap = bmp_roundtrip(m, is_processed_format=self.is_processed_format)
             cap = cv2.resize(cap, (640, 480))
-            cap = cv2.cvtColor(cap, cv2.COLOR_RGB2BGR)
+            # If using processed BGR8 format, no color conversion needed
+            # If using raw Bayer (demosaiced to RGB), convert to BGR
+            if not self.is_processed_format:
+                cap = cv2.cvtColor(cap, cv2.COLOR_RGB2BGR)
             return True, cap
         else:
             ret, frame = self.cap.read()
@@ -110,17 +143,19 @@ class GenericCapturer:
 
 
 class CaptureSystem:
-    def __init__(self, url='http://192.168.68.61:8080/video', screen_res=(1920, 1080), disable_auto_settings=False):
+    def __init__(self, url='http://192.168.68.61:8080/video', screen_res=(1920, 1080), disable_auto_settings=True, use_processed_format=True):
         """Initialize the capture system with all parameters as instance variables.
         
         Args:
             url: Camera URL for non-IC4 capture
             screen_res: Screen resolution tuple (width, height)
             disable_auto_settings: If True, disables auto exposure, auto gain, auto white balance
+            use_processed_format: If True, use IC4's ISP for color processing (matches demo app output).
+                                  If False, use raw Bayer with manual OpenCV demosaicing.
         """
         # Camera setup
         self.url = url
-        self.cap = GenericCapturer(url=self.url, disable_auto_settings=disable_auto_settings)
+        self.cap = GenericCapturer(url=self.url, disable_auto_settings=disable_auto_settings, use_processed_format=use_processed_format)
         
         # Screen and image parameters
         self.screen_res = screen_res
