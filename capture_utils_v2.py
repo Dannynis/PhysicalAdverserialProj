@@ -54,10 +54,32 @@ class GenericCapturer:
             grabber.device_open(first_device_info)
             GenericCapturer._ic4_initialized = True
 
-            print("Pixel format set to RGB8")
+            # Disable automatic adjustments to get consistent raw data
+            try:
+                props = grabber.device_property_map
+                # Try to disable gamma, auto exposure, auto gain using string property names
+                for prop_name in ['GammaEnable', 'Gamma']:
+                    try:
+                        prop = props.find(prop_name)
+                        if prop is not None:
+                            prop.value = False
+                            print(f"{prop_name} disabled")
+                    except:
+                        pass
+                for prop_name in ['ExposureAuto', 'GainAuto', 'BalanceWhiteAuto']:
+                    try:
+                        prop = props.find(prop_name)
+                        if prop is not None:
+                            prop.value = 'Off'
+                            print(f"{prop_name} set to Off")
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Warning: Could not disable some auto settings: {e}")
 
-            # Create a SnapSink
+            # Create a SnapSink - let it use camera's native format
             sink = ic4.SnapSink()
+            print("SnapSink created (using camera native format)")
             grabber.stream_setup(sink, setup_option=ic4.StreamSetupOption.ACQUISITION_START)
             self.grabber = grabber
             self.sink = sink
@@ -395,6 +417,141 @@ class CaptureSystem:
         plt.show()
         plt.imshow(frame_unwarped)
         plt.show()
+
+    def run_aruco_detector_manual(self):
+        """Manually mark 4 corners instead of detecting ArUco markers.
+        
+        Click on the 4 corners of the projection area in order:
+        1. Top-Left, 2. Top-Right, 3. Bottom-Right, 4. Bottom-Left
+        """
+        manual_corners = []
+        current_frame = None
+        
+        def mouse_callback(event, x, y, flags, param):
+            nonlocal manual_corners, current_frame
+            if event == cv2.EVENT_LBUTTONDOWN:
+                if len(manual_corners) < 4:
+                    manual_corners.append([x, y])
+                    print(f"Corner {len(manual_corners)}/4 marked at ({x}, {y})")
+        
+        print("=" * 60)
+        print("MANUAL CORNER SELECTION")
+        print("=" * 60)
+        print("Click on the 4 corners of the projection area in order:")
+        print("  1. Top-Left")
+        print("  2. Top-Right") 
+        print("  3. Bottom-Right")
+        print("  4. Bottom-Left")
+        print("Press 'r' to reset, 'q' to quit")
+        print("=" * 60)
+        
+        cv2.namedWindow("Manual Corner Selection", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Manual Corner Selection", 1280, 960)
+        cv2.setMouseCallback("Manual Corner Selection", mouse_callback)
+        
+        while len(manual_corners) < 4:
+            ret, frame = self.cap.read()
+            if not ret:
+                print("Failed to capture image")
+                self.cap = GenericCapturer(url=self.url)
+                continue
+            
+            current_frame = frame.copy()
+            display = frame.copy()
+            
+            # Draw already marked corners
+            corner_labels = ["TL", "TR", "BR", "BL"]
+            colors = [(0, 255, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0)]
+            
+            for i, corner in enumerate(manual_corners):
+                cv2.circle(display, tuple(corner), 8, colors[i], -1)
+                cv2.circle(display, tuple(corner), 10, (0, 0, 0), 2)
+                cv2.putText(display, corner_labels[i], (corner[0] + 12, corner[1] - 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, colors[i], 2)
+            
+            # Draw lines between corners
+            if len(manual_corners) >= 2:
+                for i in range(len(manual_corners) - 1):
+                    cv2.line(display, tuple(manual_corners[i]), tuple(manual_corners[i+1]), (0, 255, 0), 2)
+                if len(manual_corners) == 4:
+                    cv2.line(display, tuple(manual_corners[3]), tuple(manual_corners[0]), (0, 255, 0), 2)
+            
+            # Status text
+            next_corner = corner_labels[len(manual_corners)] if len(manual_corners) < 4 else "Done"
+            cv2.putText(display, f"Click on: {next_corner} ({len(manual_corners)}/4)", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(display, "Press 'r' to reset, 'q' to quit", (10, 60),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+            
+            cv2.imshow("Manual Corner Selection", display)
+            
+            key = cv2.waitKey(30) & 0xFF
+            if key == ord('r'):
+                manual_corners = []
+                print("Reset - start again from Top-Left corner")
+            elif key == ord('q'):
+                cv2.destroyAllWindows()
+                raise RuntimeError("Aborted by user")
+        
+        cv2.destroyAllWindows()
+        
+        # Use the captured frame and manual corners
+        frame = current_frame
+        
+        # Convert to the expected format: TL, TR, BR, BL
+        shrinked_corners = [
+            np.array(manual_corners[0]),  # TL
+            np.array(manual_corners[1]),  # TR
+            np.array(manual_corners[2]),  # BR
+            np.array(manual_corners[3])   # BL
+        ]
+        
+        corners_img_proj = np.array(shrinked_corners).astype(np.float32).reshape(1, 4, 2)
+        self.img_non_zero_section = self.img[
+            self.orig_rect_corners[0][1]:self.orig_rect_corners[2][1],
+            self.orig_rect_corners[0][0]:self.orig_rect_corners[1][0]
+        ]
+
+        # Draw corners on frame for visualization
+        frame_with_corners = frame.copy()
+        for i, corner in enumerate(corners_img_proj[0]):
+            corner_int = corner.astype(int)
+            cv2.circle(frame_with_corners, tuple(corner_int), 8, (0, 255, 0), -1)
+            cv2.putText(frame_with_corners, corner_labels[i], (corner_int[0] + 10, corner_int[1] - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.polylines(frame_with_corners, [corners_img_proj.astype(np.int32)], True, (0, 255, 0), 2)
+
+        plt.imshow(cv2.cvtColor(frame_with_corners, cv2.COLOR_BGR2RGB))
+        plt.title("Manually selected corners")
+        plt.show()
+        
+        img_non_zero_section_corners = np.array([
+            [border_size, border_size],
+            [self.img_non_zero_section.shape[1] - border_size, border_size],
+            [self.img_non_zero_section.shape[1] - border_size, 
+             self.img_non_zero_section.shape[0] - border_size],
+            [border_size, self.img_non_zero_section.shape[0] - border_size]
+        ], dtype=np.float32)
+
+        self.img_non_zero_section_corners = img_non_zero_section_corners
+        self.corners_img_proj = corners_img_proj
+        self.H = cv2.getPerspectiveTransform(corners_img_proj, img_non_zero_section_corners)
+        self.frame = frame
+
+        frame_unwarped = cv2.warpPerspective(
+            frame, self.H,
+            (self.img_non_zero_section.shape[1], self.img_non_zero_section.shape[0])
+        )
+
+        plt.imshow(self.to_place)
+        plt.title("Projected pattern")
+        plt.show()
+        plt.imshow(frame_unwarped)
+        plt.title("Unwarped frame")
+        plt.show()
+        
+        print(f"✓ Manual calibration complete!")
+        print(f"  Corners: {corners_img_proj[0]}")
 
     def cap_and_uwarp(self):
         """Capture and unwarp a frame."""
